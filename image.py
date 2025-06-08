@@ -1,93 +1,195 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LinearSegmentedColormap, to_rgb
-from matplotlib import rcParams
+from matplotlib import animation
 from numba import njit
-
-# Configure Matplotlib for high-quality output and LaTeX rendering
-rcParams['text.usetex'] = True  # Set to False if LaTeX is unavailable
-rcParams["text.latex.preamble"] = r"\usepackage{amsmath, amsfonts, systeme}"
-rcParams['figure.dpi'] = 300  # High DPI for clear output
-
-def create_colormap(hex_color1, hex_color2, hex_color3, reverse=False):
-    """Create a custom linear segmented colormap from three hex colors."""
-    colors = [to_rgb(hex_color1), to_rgb(hex_color2), to_rgb(hex_color3)]
-    if reverse:
-        colors = colors[::-1]
-    return LinearSegmentedColormap.from_list("custom_colormap", colors)
+import time
 
 @njit
-def meshgrid(x, y):
-    """Generate 2D meshgrid using Numba for performance."""
-    xx = np.empty((y.size, x.size), dtype=x.dtype)
-    yy = np.empty((y.size, x.size), dtype=y.dtype)
-    for j in range(y.size):
-        for k in range(x.size):
-            xx[j, k] = x[k]
-            yy[j, k] = y[j]
-    return xx, yy
-
-@njit
-def calc_ikeda_orbit(n_points, a, b, n_iter, x_range=(-2, 2), y_range=(-2, 2)):
-    """Compute orbits for the given map using Numba."""
-    x = np.linspace(x_range[0], x_range[1], n_points)
-    y = np.linspace(y_range[0], y_range[1], n_points)
-    xx, yy = meshgrid(x, y)
+def clifford_fast(n_points, a, b, c, d, n_iter):
+    """Fast Clifford attractor computation."""
+    # Use random initial points for faster computation
+    x = np.random.uniform(-0.5, 0.5, n_points)
+    y = np.random.uniform(-0.5, 0.5, n_points)
     
-    # Pre-allocate arrays for performance
-    l_cx = np.zeros(n_iter * n_points**2)
-    l_cy = np.zeros(n_iter * n_points**2)
+    # Store all trajectory points
+    all_x = np.zeros(n_points * n_iter)
+    all_y = np.zeros(n_points * n_iter)
     
     for i in range(n_iter):
-        # Recursive equations
-        xx_new = 2 * np.sin(xx ** 2 - yy ** 2 + a)
-        yy_new = 2 * np.cos(2 * xx * yy + b)
-        xx, yy = xx_new, yy_new
-        l_cx[i * n_points**2:(i + 1) * n_points**2] = xx.ravel()
-        l_cy[i * n_points**2:(i + 1) * n_points**2] = yy.ravel()
+        # Clifford map equations
+        x_new = np.sin(a * y) + c * np.cos(a * x)
+        y_new = np.sin(b * x) + d * np.cos(b * y)
+        x, y = x_new, y_new
+        
+        # Store points
+        start_idx = i * n_points
+        end_idx = (i + 1) * n_points
+        all_x[start_idx:end_idx] = x
+        all_y[start_idx:end_idx] = y
     
-    return l_cx, l_cy
+    return all_x, all_y
 
-def plot_orbit(l_cx, l_cy, a, b, bins=3000, area=([-2, 2], [-2, 2]), cmap=None):
-    """Generate and display the given map orbit plot with a histogram."""
-    g, _, _ = np.histogram2d(l_cx, l_cy, bins=bins, range=area)
+def create_fast_clifford_video(duration_seconds=60, fps=24):
+    """Create a fast, high-quality Clifford attractor video."""
     
-    fig, ax = plt.subplots(figsize=(8, 8))
+    total_frames = duration_seconds * fps
+    print(f"Creating {duration_seconds}s video at {fps} FPS = {total_frames} frames")
+    
+    # Optimized parameters for speed and quality
+    n_points = 5000     # Number of trajectory points
+    n_iter = 100        # Iterations per point
+    bins = 800          # Histogram resolution
+    
+    # Parameter evolution - animate parameter 'a' for dramatic effect
+    t = np.linspace(0, 6*np.pi, total_frames)  # 3 full cycles
+    a_values = -1.4 + 0.8 * np.sin(t)  # Varies from -2.2 to -0.6
+    
+    # Fixed parameters
+    b, c, d = 1.6, 1.0, 0.7
+    
+    # Beautiful colormap
+    colors = ['#000033', '#0066CC', '#00FFFF', '#FFFF00', '#FF6600', '#FF0033']
+    cmap = LinearSegmentedColormap.from_list("clifford", [to_rgb(c) for c in colors])
+    
+    # Set up figure
+    fig, ax = plt.subplots(figsize=(10, 10))
+    fig.patch.set_facecolor('black')
     fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
     
-    # Display histogram with logarithmic scaling
-    ax.imshow(np.log1p(g), vmin=0, vmax=5, cmap=cmap, origin='lower')
-    ax.set_xticks([]), ax.set_yticks([])
+    def animate(frame):
+        ax.clear()
+        ax.set_facecolor('black')
+        
+        # Current parameter value
+        a = a_values[frame]
+        
+        # Progress indicator
+        if frame % fps == 0:  # Every second
+            print(f"Frame {frame+1}/{total_frames} ({frame/fps:.1f}s) - a={a:.3f}")
+        
+        # Compute attractor
+        x_points, y_points = clifford_fast(n_points, a, b, c, d, n_iter)
+        
+        # Create density plot
+        hist, xedges, yedges = np.histogram2d(x_points, y_points, bins=bins, 
+                                            range=[[-3, 3], [-3, 3]])
+        
+        # Plot with logarithmic scaling
+        im = ax.imshow(np.log1p(hist.T), origin='lower', 
+                      extent=[-3, 3, -3, 3], cmap=cmap, 
+                      vmin=0, vmax=np.log1p(hist.max()))
+        
+        # Remove axes
+        ax.set_xticks([])
+        ax.set_yticks([])
+        
+        # Add title and info
+        ax.text(0.5, 0.95, 'Clifford Attractor Evolution', 
+               transform=ax.transAxes, ha='center', va='top',
+               fontsize=16, color='white', weight='bold')
+        
+        ax.text(0.02, 0.02, f'a = {a:.3f}\nb = {b:.1f}\nc = {c:.1f}\nd = {d:.1f}', 
+               transform=ax.transAxes, va='bottom',
+               fontsize=12, color='white',
+               bbox=dict(boxstyle='round', facecolor='black', alpha=0.7))
+        
+        return [im]
     
-    # LaTeX title with given map equations
-    ax.set_title(
-        r'$\begin{array}{lr} '
-        r'x_{t+1} = 2\sin(x_t^2 - y_t^2 + %.2f ) \\ '
-        r'y_{t+1} = 2\cos(2 x_n y_n + %.2f ) \\ '
-        r'\end{array}$' % (a, b),
-        y=0.06, fontsize=14, color="#FFFFFF"
-    )
+    print("Starting video generation...")
+    start_time = time.time()
     
+    # Create animation
+    anim = animation.FuncAnimation(fig, animate, frames=total_frames, 
+                                 interval=1000/fps, blit=True)
+    
+    # Show a preview
     plt.show()
-    # Optional: Save the plot
-    plt.savefig('map_plot.png', dpi=300, bbox_inches='tight')
+    
+    # Save video
+    filename = f'clifford_evolution_{duration_seconds}s_{fps}fps.mp4'
+    
+    try:
+        print(f"Saving video: {filename}")
+        print("This may take 5-15 minutes...")
+        
+        # High quality MP4
+        Writer = animation.writers['ffmpeg']
+        writer = Writer(fps=fps, bitrate=6000, extra_args=['-vcodec', 'libx264'])
+        anim.save(filename, writer=writer, dpi=120)
+        
+        elapsed = time.time() - start_time
+        print(f"\n✅ SUCCESS!")
+        print(f"📁 Video saved: {filename}")
+        print(f"⏱️  Total time: {elapsed/60:.1f} minutes")
+        print(f"🎬 Duration: {duration_seconds}s at {fps} FPS")
+        
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        
+        # Fallback to GIF
+        try:
+            gif_name = f'clifford_evolution_{duration_seconds}s.gif'
+            print(f"Saving as GIF: {gif_name}")
+            anim.save(gif_name, writer='pillow', fps=fps//2)
+            print(f"✅ GIF saved: {gif_name}")
+        except Exception as e2:
+            print(f"❌ GIF failed too: {e2}")
+    
+    return anim
 
-def main():
-    """Main function to set parameters and execute the given map plot."""
-    # Parameters
-    n_points = 700
-    n_iter = 300
-    a, b = 3.4415, 2.7282  # Parameter for chaotic behavior
-    area = [[-2, 2], [-2, 2]]
+# Quick test function
+def test_single_frame():
+    """Test with a single frame to verify everything works."""
+    print("Testing single frame...")
     
-    # Create custom colormap
-    color_map = create_colormap("#FDA000","#0d3d3b", "#3BDCF1", reverse=True)
+    # Compute one frame
+    x_points, y_points = clifford_fast(5000, -1.4, 1.6, 1.0, 0.7, 100)
     
-    # Compute given map orbits
-    l_cx, l_cy = calc_ikeda_orbit(n_points, a, b, n_iter, x_range=area[0], y_range=area[1])
+    # Plot
+    fig, ax = plt.subplots(figsize=(10, 10))
+    fig.patch.set_facecolor('black')
+    ax.set_facecolor('black')
     
-    # Plot the result
-    plot_orbit(l_cx, l_cy, a, b, bins=3000, area=area, cmap=color_map)
+    hist, _, _ = np.histogram2d(x_points, y_points, bins=800, range=[[-3, 3], [-3, 3]])
+    
+    colors = ['#000033', '#0066CC', '#00FFFF', '#FFFF00', '#FF6600', '#FF0033']
+    cmap = LinearSegmentedColormap.from_list("test", [to_rgb(c) for c in colors])
+    
+    ax.imshow(np.log1p(hist.T), origin='lower', extent=[-3, 3, -3, 3], cmap=cmap)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_title('Clifford Attractor Test', color='white', fontsize=16)
+    
+    plt.tight_layout()
+    plt.show()
+    
+    print("✅ Single frame test successful!")
 
-if __name__ == "__main__":
-    main()
+# Run test first
+print("🧪 Testing system...")
+test_single_frame()
+
+print("\n" + "="*60)
+print("🎬 CLIFFORD ATTRACTOR VIDEO GENERATOR")
+print("="*60)
+
+print("\nChoose your video duration:")
+print("1. Quick test (10 seconds)")  
+print("2. Short video (30 seconds)")
+print("3. Full video (60 seconds)")
+print("4. Long video (120 seconds)")
+
+print("\nUncomment one of these lines to generate:")
+print("# create_fast_clifford_video(duration_seconds=10, fps=20)   # Quick test")
+print("# create_fast_clifford_video(duration_seconds=30, fps=24)   # Short video") 
+print("# create_fast_clifford_video(duration_seconds=60, fps=24)   # 1 minute video")
+print("# create_fast_clifford_video(duration_seconds=120, fps=30)  # 2 minute video")
+
+# Uncomment ONE line below to create your video:
+
+# Quick 10-second test (recommended first)
+#create_fast_clifford_video(duration_seconds=10, fps=20)
+
+# Full 1-minute video (uncomment for final version)
+create_fast_clifford_video(duration_seconds=60, fps=24)
